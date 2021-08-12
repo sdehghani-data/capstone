@@ -1,0 +1,219 @@
+---
+title: "milestonereport"
+author: "Sanaz Dehghani"
+date: "8/7/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+require(tm)
+require(wordcloud)
+require(stringi)
+require(RWeka)
+require(ggplot2)
+opts_chunk$set(cache=TRUE)
+options(java.parameters = "-Xmx7300m")
+set.seed(100)
+```
+
+
+#Data Science Capstone Project
+##Milestone Report: Exploratory analysis of the training data set
+
+####Artem Braun
+####18th February, 2018  
+
+
+##Summary
+
+####This report represents exploratory analysis of the training dataset provided for Capstone Project, as well as my goals for creating a prediction algorithm. The following tasks are described:
+
+- Data acquisition and tidying
+- Basic summary statistics
+- Some interesting findings in dataset
+- Feedback on my plans for creating a prediction algorithm and Shiny app
+
+##Acquiring data
+
+####This project focuses on creating a predictive model based on language data from [HC Corpora](http://www.corpora.heliohost.org/aboutcorpus.html). The corpora are collected from publicly available sources by a web crawler. 
+####The dataset for the analysis is downloaded from the course web site in the form of zip file containing the text files: [Capstone Dataset](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip).
+####There are 4 datasets in this zip file - according to language: English, Deutsche, Finnish and Russian. Given that Coursera peer students are international ones, I chose to use English dataset. In order to be concise, it is assumed that data set has been already unzipped and located to a working directory.
+####Dataset is derived from three representative sources: blogs, news articles and twitter. 
+
+####In the following code the dataset is loaded and some exploratory statistics is gathered:
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Loading data in R, sampling and gathering statistics
+fileName <- "en_US.blogs.txt"
+con <- file(fileName, open="r")
+lineBlogs_data <- readLines(con, skipNul = TRUE, warn = FALSE, encoding = "UTF-8")
+lineBlogs <- VCorpus(VectorSource(sample(lineBlogs_data, 1000)))
+words_in_Blogs <- round(sum(stri_count_words(lineBlogs_data)),1)/1000000
+lines_in_Blogs <- length(lineBlogs_data)
+Mb_in_Blogs <- file.info("en_US.blogs.txt")$size/1024/1024
+close(con)
+fileName <- "en_US.news.txt"
+con <- file(fileName, open="rb")
+lineNews_data <- readLines(con, skipNul = TRUE, warn = FALSE, encoding = "UTF-8") 
+lineNews <- VCorpus(VectorSource(sample(lineNews_data, 1000)))
+words_in_News <- round(sum(stri_count_words(lineNews_data)),1)/1000000
+lines_in_News <- length(lineNews_data)
+Mb_in_News <- file.info("en_US.news.txt")$size/1024/1024
+close(con)
+fileName <- "en_US.twitter.txt"
+con <- file(fileName, open="r")
+lineTwitter_data <- readLines(con, skipNul = TRUE, warn = FALSE, encoding = "latin1")
+lineTwitter <- VCorpus(VectorSource(sample(lineTwitter_data, 1000)))
+words_in_Twitter <- round(sum(stri_count_words(lineTwitter_data)),1)/1000000
+lines_in_Twitter <- length(lineTwitter_data)
+Mb_in_Twitter <- file.info("en_US.twitter.txt")$size/1024/1024
+close(con)
+remove(lineBlogs_data, lineNews_data, lineTwitter_data)
+```
+
+####Now we can look at summary statistics of source files:
+
+```{r, echo=TRUE, results='asis', message=FALSE, warning=FALSE}
+Summary <- data.frame(file = c("Blogs", "News", "Twitter"),
+                      Millions_of_words <- c(words_in_Blogs, words_in_News, words_in_Twitter),
+                      Number_of_lines <- c(lines_in_Blogs, lines_in_News, lines_in_Twitter),
+                      File_size_Mb <- c(Mb_in_Blogs, Mb_in_News, Mb_in_Twitter))
+colnames(Summary) <- c("file", "Millions_of_words", "Number_of_lines", "File_size_Mb")
+knitr::kable(Summary, format = "markdown")
+```
+
+####We are dealing with a huge dataset with 4.2 mln of elements and more than 100 mln words. Overall size is more than 500Mb. Therefore, for exploratory purposes it makes sense to limit the dataset to a size which would be feasible to explore in a timely manner. We will use considerable amount of data for prediction, but for exploratory purposes we can limit each of three datasets to 1000 elements.  
+####Blogs have fewer elements, but the biggest number of words. This is due to the reason that blog posts is unlimited in size and could be very large. 
+####On the contrary, twitter dataset has the largest number of elements, but the smallest number of words. This is due to the fact that tweets have limit of 140 characters. 
+
+
+##Tidying data
+
+####As a next step, dataset should be cleaned and prepared for tokenization. 
+
+####All characters in dataset have to be transformed to lowercase. Redundant white spaces should be eliminated, as well as punctuation and numbers. 
+####Stopwords is a special issue. Stopwords are very common in the English language, but they are mostly technical words that do not contribute a lot content, e.g. “the”. I believe that eliminating of stopwords and hyphens/dashes as well as stemming are detrimental for predicting a regular phrases. Therefore, I will definitely use them in prediction algorithm in my Shiny app. Nevertheless, for exploratory word frequencies analysis it is better not to include stopwords. 
+
+####In the following code chunk all these tasks are executed with 'tm' package:
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Concatination of three datasets
+txt <- c(lineBlogs, lineNews, lineTwitter)
+remove(lineBlogs, lineNews, lineTwitter)
+#Tidying data
+txt <- tm_map(txt, removeNumbers)
+txt <- tm_map(txt, removePunctuation, preserve_intra_word_dashes = TRUE)
+txt <- tm_map(txt, stripWhitespace)
+txt <- tm_map(txt, content_transformer(tolower))
+txt <- tm_map(txt, removeWords, stopwords("en"))
+```
+
+#### For eliminating profanity words we used bad words list from Luis von Ahns “bad word list”, which is assumed to be located in a working directory. 
+
+
+##Tokenization
+
+####To get an idea of data content we will use the frequency of the words. In order to get frequencies we should perform tokenization or building N-Grams. An N-gram is essentially a group of words that appear in order, with the N value representing how many words are used.
+
+###For example, in the sentence "I would like to buy":
+- Two-gram is "I would"
+- Tri-gram is "I would like"
+- Four-gram is "I would like to"
+- 5-gram is "I would like to buy"
+
+####Using N-grams gives us more context and information on how words are used in a language to create phrases. This could be used for a more precise predicition model. 
+
+####There are several libraries in R that could be used for tokenization, 'tm' and 'quanteda' are probably most useful. Quanteda is much faster, that is why I will use it for building a prediction algorithm. 
+####In order to get experience with different libraries we will use less faster 'tm' for exploratory purposes.
+
+####Our cleaned dataset is converted to a Term Document Matrix, that describes the frequency of terms (words/phrases) that occur in a collection of documents (our corpora).
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Tokenization
+UniToken<-function(x)NGramTokenizer(x, Weka_control(min = 1, max = 1))
+BiToken<-function(x)NGramTokenizer(x, Weka_control(min = 2, max = 2))
+TriToken<-function(x)NGramTokenizer(x, Weka_control(min = 3, max = 3))
+unigrams<-function(x){
+        tdm <- TermDocumentMatrix(x, control = list(tokenize = UniToken))
+        fm <- rowSums(as.matrix(tdm))
+        ngram<-data.frame(ngram=names(fm),freq=fm)
+        ngram<-ngram[order(-ngram$freq),]
+}
+bigrams<-function(x){
+        tdm <- TermDocumentMatrix(x, control = list(tokenize = BiToken))
+        fm <- rowSums(as.matrix(tdm))
+        ngram<-data.frame(ngram=names(fm),freq=fm)
+        ngram<-ngram[order(-ngram$freq),]
+}
+trigrams<-function(x){
+        tdm <- TermDocumentMatrix(x, control = list(tokenize = TriToken))
+        fm <- rowSums(as.matrix(tdm))
+        ngram<-data.frame(ngram=names(fm),freq=fm)
+        ngram<-ngram[order(-ngram$freq),]
+}
+Unigrams <- unigrams(txt)
+Bigrams <- bigrams(txt)
+Trigrams <- trigrams(txt)
+```
+
+####The Type/Token Ratio (TTR) is a well known measure of language comparison, which is simply the total word types divided by tokens. The TTR indicates complexity, where the more types in comparison to the number of tokens, the more varied is the vocabulary.
+
+####It is interesting that news articles seem to have more varied (less repetitive) vocabulary, probably because media editors try to use more eloquent vocabulary. Alternatively, Twitter and blogs tend to use more repetitive vocabulary than news, probably because people do not care about eloquency in their everyday posts.
+
+
+##Exploratory analysis
+
+####Now, having our dataset tokenized, we can get more profound picture of dataset. 
+
+####Some words are more frequent than others. The following word cloud is a good visualization of distribution of word frequencies. 
+
+```{r, echo=TRUE, results='asis', message=FALSE, warning=FALSE}
+wordcloud(Unigrams$ngram, Unigrams$freq, scale=c(5,0.5), max.words=100, random.order=FALSE, 
+          rot.per=0.5, use.r.layout=FALSE, colors=brewer.pal(6,"Dark2"))
+```
+
+####Frequencies of most popular 2-grams in the dataset:
+
+```{r, echo=TRUE, results='asis', message=FALSE, warning=FALSE}
+par(mar=c(5,7,1,1))
+barplot(Bigrams[1:20,2],col="orange",
+        names.arg = Bigrams$ngram[1:20],horiz = TRUE,
+        space=0.1, xlim=c(0,20),las=2)
+```
+
+####Frequencies of most popular 3-grams in the dataset:
+
+```{r, echo=TRUE, results='asis', message=FALSE, warning=FALSE}
+par(mar=c(5,15,1,1)) 
+barplot(Trigrams[1:20,2],col="orange",
+        names.arg = Trigrams$ngram[1:20], horiz = TRUE,
+        space=0.1, xlim=c(0,3),las=2)
+```
+
+
+####How many unique words do we need in a frequency sorted dictionary to cover 50% and 90% of all word instances in the language? 
+
+```{r, echo=TRUE, results='asis', message=FALSE, warning=FALSE}
+sumCover <- 0
+for(i in 1:length(Unigrams$freq)) {
+        sumCover <- sumCover + Unigrams$freq[i]
+        if(sumCover >= 0.5*sum(Unigrams$freq)){break}
+}
+print(i)
+sumCover <- 0
+for(i in 1:length(Unigrams$freq)) {
+        sumCover <- sumCover + Unigrams$freq[i]
+        if(sumCover >= 0.9*sum(Unigrams$freq)){break}
+}
+print(i)
+```
+
+##Next steps
+
+- I am going to develop a prediction algorithm. I will start from basic N-gram model using this exploratory analysis. If the pattern isn’t found in N-Gram, it will backoff to check for N-1-Gram, etc.
+- In order to increase the efficiency of data reading and accessing I have to elaborate effective method of looking through N-Grams. My current idea is that it is much faster to find by integer than by characters. Therefore, I will probably create a dictionary in the form of named vector. And N-Grams will be mapped to this dictionary.
+- I am going to build a data product (Shiny app) that takes a phrase as an input and predicts the next word.
+- I will create the presentation with the basic assumptions and characteristics of the model and app.
+
+####For exploratory purposes above we used 'tm' package with its functions 'TermDocumentMatrix' and 'NGramTokenizer'. This package works fine for 3000 elements in a dataset. But for really big data this package is dramatically slow. Therefore, for prediction algorithm we will use 'quanteda' package and its 'dfm' function (Document-Feature Matrix). 
